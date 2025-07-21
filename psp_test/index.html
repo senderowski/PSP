@@ -1,1 +1,321 @@
 
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Rejestrator Czasu Pracy</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <meta name="theme-color" content="#28a745" />
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      text-align: center;
+    }
+    h1 { font-size: 6vw; margin: 2vh 0; }
+    .header-controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 4vh;
+    }
+    .btn {
+      font-size: 5vw;
+      padding: 5vh 5vw;
+      margin: 1vw;
+      border-radius: 12px;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    .btn-wejscie { background: #28a745; }
+    .btn-wyjscie { background: #dc3545; }
+    .btn-export, .btn-clear {
+      font-size: 4vw;
+      padding: 2vh 5vw;
+      position: fixed;
+      bottom: 1vh;
+      z-index: 999;
+    }
+    .btn-export { background: #007bff; right: 2vw; }
+    .btn-clear { background: #ffc107; left: 2vw; }
+    #central-clock {
+      font-size: 6vw;
+      font-weight: bold;
+      padding: 1vh;
+    }
+    table {
+      margin: auto;
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 4vw;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 1vh;
+    }
+    .pending { background: rgba(255,255,0,0.2); }
+    .complete { background: rgba(40,167,69,0.35); }
+    #reader {
+      width: 90vw;
+      margin: 2vh auto;
+      display: none;
+    }
+    #logo-background {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      opacity: 0.2;
+      z-index: -1;
+      pointer-events: none;
+    }
+    #logo-background img {
+      width: 70vw;
+      max-width: 500px;
+    }
+    .msg {
+      display: none;
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      padding: 3vh 5vw;
+      font-size: 5vw;
+      border-radius: 10px;
+      z-index: 1000;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    #error-message { background: #dc3545; }
+    #success-message { background: #28a745; }
+
+    #login-overlay {
+      position:fixed; top:0; left:0; width:100%; height:100%;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    #login-overlay input {
+      padding: 1.5vh;
+      font-size: 4vw;
+      width: 60vw;
+      margin-bottom: 2vh;
+    }
+    #login-overlay button {
+      padding: 1.5vh 4vw;
+      font-size: 4vw;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Logowanie -->
+<div id="login-overlay">
+  <div style="background: white; padding: 5vh 5vw; border-radius: 10px; text-align: center;">
+    <h2 style="font-size: 6vw;">Logowanie</h2>
+    <input id="login" placeholder="Login" /><br/>
+    <input id="haslo" placeholder="Hasło" type="password" /><br/>
+    <button onclick="zaloguj()">Zaloguj</button>
+    <p id="blad-logowania" style="color: red; margin-top: 1vh; display: none;">Błędne dane logowania!</p>
+  </div>
+</div>
+
+<!-- Aplikacja (ukryta przed logowaniem) -->
+<div id="app" style="display: none;">
+  <div id="error-message" class="msg"></div>
+  <div id="success-message" class="msg"></div>
+
+  <div id="logo-background">
+    <img src="https://cdn.glitch.global/55b49e7a-74e7-4448-b7d3-6e743971d1c8/logo%20MS.png?v=1745502701400" alt="MSys Logo" />
+  </div>
+
+  <h1>Rejestrator Czasu Pracy</h1>
+
+  <div class="header-controls">
+    <button class="btn btn-wejscie" onclick="startScanner('Wejście')">Wejście</button>
+    <div id="central-clock">00:00:00</div>
+    <button class="btn btn-wyjscie" onclick="startScanner('Wyjście')">Wyjście</button>
+  </div>
+
+  <div id="reader"></div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>Wejście</th><th>Wyjście</th><th>Czas</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="historia"></tbody>
+  </table>
+
+  <button class="btn-export" onclick="eksportujCSV()">Eksportuj CSV</button>
+  <button class="btn-clear" onclick="wyczyscHistorie()">Wyczyść historię</button>
+</div>
+
+<script>
+const PIN = "1234";
+const LOGIN = "admin";
+const HASLO = "1234";
+const FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdx7kemy7oERaNMKPnX-pt6jNYbnxj6e0mXSTe0cW6RnD_pVQ/formResponse";
+const ENTRY_ID = "entry.413172395";
+const ENTRY_TYP = "entry.583083047";
+
+function zaloguj() {
+  const login = document.getElementById("login").value.trim();
+  const haslo = document.getElementById("haslo").value.trim();
+  if (login === LOGIN && haslo === HASLO) {
+    sessionStorage.setItem("zalogowany", "1");
+    document.getElementById("login-overlay").style.display = "none";
+    document.getElementById("app").style.display = "block";
+  } else {
+    document.getElementById("blad-logowania").style.display = "block";
+  }
+}
+window.addEventListener("DOMContentLoaded", () => {
+  if (sessionStorage.getItem("zalogowany") === "1") {
+    document.getElementById("login-overlay").style.display = "none";
+    document.getElementById("app").style.display = "block";
+  }
+});
+
+function pokazBlad(t1, t2) {
+  const d = document.getElementById('error-message');
+  d.innerHTML = `<strong>${t1}</strong><br>${t2}`;
+  d.style.display = 'block';
+  setTimeout(() => { d.style.opacity = 1; }, 10);
+  setTimeout(() => { d.style.opacity = 0; setTimeout(() => { d.style.display = 'none'; }, 500); }, 3000);
+}
+
+function pokazSukces(t1, t2) {
+  const d = document.getElementById('success-message');
+  d.innerHTML = `<strong>${t1}</strong><br>${t2}`;
+  d.style.display = 'block';
+  setTimeout(() => { d.style.opacity = 1; }, 10);
+  setTimeout(() => { d.style.opacity = 0; setTimeout(() => { d.style.display = 'none'; }, 500); }, 3000);
+}
+
+function startScanner(typ) {
+  const html5QrCode = new Html5Qrcode("reader");
+  document.getElementById('reader').style.display = 'block';
+  html5QrCode.start({ facingMode: "user" }, { fps: 10, qrbox: 250 },
+    qrCodeMessage => {
+      html5QrCode.stop().then(() => {
+        document.getElementById('reader').style.display = 'none';
+        const d = new Date();
+        const dt = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+        rejestruj(qrCodeMessage, typ, dt);
+        wyslijDoFormularza(qrCodeMessage, typ);
+      });
+    });
+}
+
+function rejestruj(id, typ, data) {
+  const tbody = document.getElementById("historia");
+  if (typ === "Wejście") {
+    for (let row of tbody.rows) {
+      if (row.cells[0].innerText === id && row.cells[2].innerText === "") {
+        pokazBlad("Masz już wejście!", "Najpierw musisz się wylogować.");
+        return;
+      }
+    }
+    const row = tbody.insertRow(0);
+    row.className = "pending";
+    row.innerHTML = `<td>${id}</td><td>${data}</td><td></td><td></td><td>Pending</td>`;
+    pokazSukces("Zarejestrowano wejście!", id);
+  } else if (typ === "Wyjście") {
+    for (let row of tbody.rows) {
+      if (row.cells[0].innerText === id && row.cells[2].innerText === "") {
+        row.cells[2].innerText = data;
+        const start = new Date(row.cells[1].innerText.replace(' ', 'T'));
+        const end = new Date(data.replace(' ', 'T'));
+        const diff = end - start;
+        if (!isNaN(diff)) {
+          const h = Math.floor(diff / 3600000);
+          const m = Math.floor((diff % 3600000) / 60000);
+          row.cells[3].innerText = `${h}h ${m}m`;
+        }
+        row.cells[4].innerText = "Complete";
+        row.className = "complete";
+        pokazSukces("Zarejestrowano wyjście!", id);
+        zapiszHistorie();
+        return;
+      }
+    }
+    pokazBlad("Brak wejścia!", "Nie możesz się wylogować.");
+  }
+  zapiszHistorie();
+}
+
+function wyslijDoFormularza(id, typ) {
+  const formData = new FormData();
+  formData.append(ENTRY_ID, id);
+  formData.append(ENTRY_TYP, typ);
+  fetch(FORM_URL, { method: "POST", mode: "no-cors", body: formData });
+}
+
+function zapiszHistorie() {
+  localStorage.setItem("historia", document.getElementById('historia').innerHTML);
+}
+function wczytajHistorie() {
+  const h = localStorage.getItem("historia");
+  if (h) document.getElementById('historia').innerHTML = h;
+}
+function wyczyscHistorie() {
+  if (prompt("Podaj PIN:") === PIN) {
+    if (confirm("Czy na pewno usunąć historię?")) {
+      document.getElementById('historia').innerHTML = "";
+      localStorage.removeItem("historia");
+    }
+  } else {
+    pokazBlad("Błędny PIN!", "Spróbuj ponownie.");
+  }
+}
+function eksportujCSV() {
+  const rows = document.querySelectorAll("#historia tr");
+  if (!rows.length) return alert("Brak danych do eksportu.");
+  const d = new Date();
+  const nazwa = `historia-${d.toISOString().slice(0,19).replace(/:/g,"-")}.csv`;
+  let csv = "ID,Wejscie,Wyjscie,Czas pracy,Status\n";
+  rows.forEach(row => {
+    const cells = row.querySelectorAll("td");
+    csv += [...cells].map(td => td.innerText.trim()).join(",") + "\n";
+  });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nazwa;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+function updateClock() {
+  const d = new Date();
+  document.getElementById('central-clock').innerText =
+    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+setInterval(updateClock, 1000);
+window.onload = () => {
+  wczytajHistorie();
+  updateClock();
+  setInterval(updateClock, 1000);
+};
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js');
+}
+</script>
+
+</body>
+</html>
